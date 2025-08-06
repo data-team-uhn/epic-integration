@@ -118,13 +118,12 @@ the specified patient on the specified day, where the status is "arrived." That 
    yarn run start
    ```
 5. Click "Run Test" in your simulation or click the test name in the list of simulations on the left of the screen to
-   start the simulation.
-   You may be asked to look up a patient before running the simulation.
+   start the simulation. You may be asked to look up a patient before running the simulation.
 6. Starting the simulation will force a redirect to the initialization path you configured in your `.env` file.
-   This will start the OAuth flow, and you will be prompted to log in and authorize the app with Epic.
-7. After successful authentication, a success message will be shown in the browser. If configured to do so, the browser
-   will display the access token and user profile information as well. Note that the user profile is fetched using the
-   `fhirUser` scope, which provides a URL directly to the user's FHIR endpoint.
+   This will start the OAuth flow. Since the user has already authenticated, they will not be asked to do so again.
+7. After successful authentication with the launch token, a success message will be shown in the browser. If configured 
+   to do so, the browser will display the access token and user profile information as well. Note that the user profile 
+   is fetched using the `fhirUser` scope, which provides a URL directly to the user's FHIR endpoint.
 8. A token.json file will be created in the current directory containing the auth response, including the access token
    and id token.
 9. If `FETCH_ADITIONAL_RESOURCES` is true and there are requests defined in `test-requests.json`, those requests will be
