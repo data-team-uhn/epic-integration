@@ -1,0 +1,8 @@
+[
+  {
+    "resource": "Patient",
+    "params": {
+      "identifier": "changeme"
+    }
+  }
+]
