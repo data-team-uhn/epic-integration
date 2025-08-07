@@ -13,8 +13,11 @@
 // # Step 3: Exchange the authorization code for an access token.
 // # This will be done in the callback server when Epic redirects back to the app.
 // ###########################################################################################
+
 import Bluebird from 'bluebird'
 import fs from 'fs'
+import jwt from 'jsonwebtoken'
+import JwksClient from 'jwks-client'
 import { jwtDecode } from 'jwt-decode'
 import _ from 'lodash'
 import url from 'url'
@@ -34,17 +37,27 @@ const {
 } = process.env
 const REDIRECT_URI = `http://${HOST}:${PORT}${CALLBACK_PATH}`
 const METADATA_URL = `${EPIC_BASE_URL}/metadata`
+const OPENID_CONFIG_URL = `${EPIC_BASE_URL}/.well-known/openid-configuration`
 const FETCH_PROFILE = process.env.FETCH_PROFILE === 'true'
 const FETCH_ADDITIONAL_RESOURCES = process.env.FETCH_ADDITIONAL_RESOURCES === 'true'
 const RESPONSE_DIRECTORY = './responses'
 
 /**
- * Global URIs available to request epic auth and exchange code for token.
+ * Global data fetched from Epic's metadata and Openid config
  */
-let authUri, tokenUri
+let authUri, tokenUri, jwksUri, openIdIssuer
 
 /**
- * Fetch the authorization and token URIs from Epic's FHIR metadata.
+ * Fetch metadata and OpenID config.
+ *
+ * From the metadata, store the authorization and token uris.
+ * These will be used to initialize authorization and exchange
+ * auth code for a token, respectively.
+ *
+ * From the openID config, store the JWKS URI and the issuer.
+ * The JWKS URI stores Epic's public key used to verify OpenID
+ * tokens. The issuer is typically Epic's base url and will also
+ * be used when verifying the OpenID token.
  * @returns {Promise<void>}
  */
 export async function fetchURIs() {
@@ -61,6 +74,47 @@ export async function fetchURIs() {
 
   logger.debug(`Authorization URI: ${authUri}`)
   logger.debug(`Token URI: ${tokenUri}`)
+
+  const openIdConfigRes = await fetch(OPENID_CONFIG_URL, {
+    headers: { Accept: 'application/json' }
+  })
+  const openIdConfig = await openIdConfigRes.json()
+
+  jwksUri = _.get(openIdConfig, 'jwks_uri')
+  openIdIssuer = _.get(openIdConfig, 'issuer')
+  logger.debug(`JWKS URI: ${tokenUri}`)
+  logger.debug(`OpenID Issuer: ${openIdIssuer}`)
+}
+
+/**
+ * Validate the ID token using Epic's JWKS URI.
+ *
+ * @param {string} token - The ID token to validate.
+ * @returns {Promise<object>} - The decoded and validated token payload.
+ */
+async function validateIdToken(token) {
+  const decodedHeader = jwtDecode(token, { header: true })
+  const { kid } = decodedHeader
+
+  logger.debug('id token kid:', kid)
+
+  // Fetch the signing key from the JWKS URI.
+  const client = JwksClient({ jwksUri })
+  const getSigningKeyAsync = Bluebird.promisify(client.getSigningKey.bind(client))
+  const key = await getSigningKeyAsync(kid)
+  const publicKey = key.publicKey
+
+  logger.debug('Epic public key:', publicKey)
+
+  return jwt.verify(
+    token,
+    publicKey,
+    {
+      algorithms: ['RS256'],
+      issuer: openIdIssuer,
+      audience: CLIENT_ID
+    }
+  )
 }
 
 /**
@@ -159,8 +213,12 @@ export async function exchangeCodeForToken(req, res) {
       throw new Error(`Token exchange failed: ${tokenResponse.status} ${await tokenResponse.text()}`, { cause: 'Failed to get token from Epic' })
     }
 
-    // Write token to file (not necessary for production code)
     const token = await tokenResponse.json()
+
+    // Validate id token using Epic's signing key
+    await validateIdToken(token.id_token)
+
+    // Write token to file (not necessary for production code)
     await fs.writeFileSync('./token.json', JSON.stringify(token, null, 2))
     logger.info('Access token saved to token.json')
 
@@ -179,7 +237,7 @@ export async function exchangeCodeForToken(req, res) {
     }
   } catch (error) {
     logger.error('Token exchange failed:', error.message)
-    res.writeHead(500).end(`${error.cause}: ${error.message}`)
+    return res.writeHead(500).end(`${error.cause}: ${error.message}`)
   }
 }
 
@@ -232,7 +290,7 @@ async function testRequests(token) {
 
   if (!fs.existsSync(RESPONSE_DIRECTORY)) {
     // If it doesn't exist, create the directory
-    fs.mkdirSync(RESPONSE_DIRECTORY);
+    fs.mkdirSync(RESPONSE_DIRECTORY)
   }
 
   return Bluebird.each(requests, async (request) => {
